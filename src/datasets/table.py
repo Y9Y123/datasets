@@ -78,7 +78,12 @@ def _not_equal_nulls_equal(left, right):
 
 
 def _batch_accumulate_arrow_table_by_columns(
-    table: pa.Table, indices: list[int], columns: tuple[str], tables_accumulator: list[pa.Table], length: Optional[int]
+    table: pa.Table,
+    indices: list[int],
+    columns: tuple[str],
+    tables_accumulator: list[pa.Table],
+    length: Optional[int],
+    drop_last_batch: bool = False,
 ) -> pa.Table:
     accumulate_last_batch = length is None or indices[-1] + 1 < length
     # keep accumulating if key is the same, otherwise include the accumulated tables
@@ -111,7 +116,8 @@ def _batch_accumulate_arrow_table_by_columns(
     # make the batched table
     offsets = pc.add(1, offsets)
     offsets = pa.concat_arrays([pa.array([0], type=pa.int32()), offsets.cast(pa.int32())])
-    if not accumulate_last_batch:
+    if not accumulate_last_batch and not drop_last_batch:
+        # the last group may be incomplete, so `drop_last_batch` leaves it out by not adding its end offset
         offsets = pa.concat_arrays([offsets, pa.array([len(table)], type=pa.int32())])
     batched_columns = []
     for column_name in table.column_names:

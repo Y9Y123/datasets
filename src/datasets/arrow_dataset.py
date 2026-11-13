@@ -4100,6 +4100,8 @@ class Dataset(DatasetInfoMixin, IndexableMixin, TensorflowDatasetMixin):
                 <Added version="4.9.0"/>
             drop_last_batch (`bool`, defaults to `False`):
                 Whether to drop the last incomplete batch.
+                When `by_column` is set, this applies to the last group rather than the last input batch, so a
+                group that happens to end on a short input batch is still kept.
             num_proc (`int`, *optional*, defaults to `None`):
                 Max number of processes when generating cache. Already cached shards are loaded sequentially.
             new_fingerprint (`str`, *optional*, defaults to `None`):
@@ -4127,19 +4129,27 @@ class Dataset(DatasetInfoMixin, IndexableMixin, TensorflowDatasetMixin):
                 raise NotImplementedError("Multiprocessed batching by column is not implemented yet")
             columns = [by_column] if isinstance(by_column, str) else by_column
             _batch_fn = partial(
-                _batch_accumulate_arrow_table_by_columns, columns=columns, tables_accumulator=[], length=len(self)
+                _batch_accumulate_arrow_table_by_columns,
+                columns=columns,
+                tables_accumulator=[],
+                length=len(self),
+                drop_last_batch=drop_last_batch,
             )
             with_indices = True
+            # `drop_last_batch` applies to the groups this function emits, not to the input batches we accumulate
+            # from: the last input batch can still complete a group, and an incomplete group is dropped below.
+            map_drop_last_batch = False
         else:
             _batch_fn = _batch_arrow_table
             with_indices = False
+            map_drop_last_batch = drop_last_batch
 
         return self.with_format("arrow").map(
             _batch_fn,
             with_indices=with_indices,
             batched=True,
             batch_size=batch_size,
-            drop_last_batch=drop_last_batch,
+            drop_last_batch=map_drop_last_batch,
             num_proc=num_proc,
             new_fingerprint=new_fingerprint,
             desc="Batching examples",

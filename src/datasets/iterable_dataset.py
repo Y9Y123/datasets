@@ -4706,6 +4706,8 @@ class IterableDataset(DatasetInfoMixin):
                 <Added version="4.9.0"/>
             drop_last_batch (`bool`, defaults to `False`):
                 Whether to drop the last incomplete batch.
+                When `by_column` is set, this applies to the last group rather than the last input batch, so a
+                group that happens to end on a short input batch is still kept.
 
         Example:
 
@@ -4734,11 +4736,16 @@ class IterableDataset(DatasetInfoMixin):
             ds = (
                 self.with_format("arrow")
                 ._map(
-                    partial(_batch_accumulate_arrow_table_by_columns, columns=columns),
+                    partial(
+                        _batch_accumulate_arrow_table_by_columns, columns=columns, drop_last_batch=drop_last_batch
+                    ),
                     with_indices=True,
                     batched=True,
                     batch_size=batch_size or config.DEFAULT_MAX_BATCH_SIZE,
-                    drop_last_batch=drop_last_batch,
+                    # `drop_last_batch` applies to the groups this function emits, not to the input batches we
+                    # accumulate from: a short last input batch can still complete a group, and an incomplete
+                    # group is dropped by the function itself when it flushes the accumulator.
+                    drop_last_batch=False,
                     features=features,
                     is_batch_accumulate_arrow_table_function=True,
                 )

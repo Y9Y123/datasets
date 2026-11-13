@@ -5255,6 +5255,56 @@ def test_dataset_batch_by_column_with_nulls(batch_size, streaming):
     assert batch_ids(ds, "category") == [[0, 1, 2]]
 
 
+@pytest.mark.parametrize("batch_size", [None, 2, 3, 4])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_dataset_batch_by_column_drop_last_batch(batch_size, streaming):
+    # `drop_last_batch` applies to the groups that come out of the batching step, not to the input batches that
+    # are accumulated into them: with `by_column`, an input batch can be short and still complete a group, and a
+    # group can straddle two input batches. Dropping the trailing *input* batch instead loses a complete group
+    # (or keeps a truncated one), so `Dataset` and `IterableDataset` must both apply it to the last group.
+    def group_ids(ds, **kwargs):
+        if streaming:
+            ds = ds.to_iterable_dataset()
+        return [batch["id"] for batch in ds.batch(by_column="category", batch_size=batch_size, **kwargs)]
+
+    # groups 0-2 are complete, group 3 straddles the trailing input batch
+    ds = Dataset.from_dict({"id": list(range(10)), "category": [0, 0, 0, 1, 1, 2, 2, 2, 3, 3]})
+    assert group_ids(ds) == [[0, 1, 2], [3, 4], [5, 6, 7], [8, 9]]
+    # the complete group [5, 6, 7] must survive: the trailing input batch only holds [8, 9]
+    assert group_ids(ds, drop_last_batch=True) == [[0, 1, 2], [3, 4], [5, 6, 7]]
+
+    # a complete last group is still the last group, so it goes too
+    ds = Dataset.from_dict({"id": list(range(8)), "category": [0, 0, 0, 1, 1, 2, 2, 2]})
+    assert group_ids(ds) == [[0, 1, 2], [3, 4], [5, 6, 7]]
+    assert group_ids(ds, drop_last_batch=True) == [[0, 1, 2], [3, 4]]
+
+    # a single group spanning the whole dataset is the last one
+    ds = Dataset.from_dict({"id": [0, 1, 2], "category": ["A", "A", "A"]})
+    assert group_ids(ds) == [[0, 1, 2]]
+    assert group_ids(ds, drop_last_batch=True) == []
+
+    # nulls keep being their own group, and the trailing one is still the one that gets dropped
+    ds = Dataset.from_dict({"id": list(range(4)), "category": ["A", None, None, "B"]})
+    assert group_ids(ds) == [[0], [1, 2], [3]]
+    assert group_ids(ds, drop_last_batch=True) == [[0], [1, 2]]
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_batch_by_column_drop_last_batch_matches_between_dataset_types(streaming):
+    # The two implementations stream differently (one slices an in-memory table, the other accumulates across
+    # batches), but `drop_last_batch` must select the same groups in both.
+    data = {"id": list(range(12)), "category": [0, 0, 1, 1, 1, 2, 3, 3, 3, 3, 4, 4]}
+    ds = Dataset.from_dict(data)
+    if streaming:
+        ds = ds.to_iterable_dataset()
+    for batch_size in [None, 1, 2, 3, 5]:
+        kept = [batch["id"] for batch in ds.batch(by_column="category", batch_size=batch_size)]
+        dropped = [
+            batch["id"] for batch in ds.batch(by_column="category", batch_size=batch_size, drop_last_batch=True)
+        ]
+        assert dropped == kept[:-1]
+
+
 @pytest.mark.parametrize("format_type", ["pyarrow", "pandas"])
 def test_dataset_batch_with_table_format(format_type):
     ds = Dataset.from_dict({"a": [1, 2, 3, 4]})
